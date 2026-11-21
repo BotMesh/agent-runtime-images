@@ -124,11 +124,11 @@ STOPWORDS = {
 }
 
 EXPLICIT_TICKER_RE = re.compile(
-    r"(?:ticker|symbol|代码|股票代码|股票)\s*[:：=]?\s*([A-Za-z][A-Za-z0-9.\-]{0,15})",
+    r"(?:ticker|symbol)\s*[:=]?\s*([A-Za-z][A-Za-z0-9.\-]{0,15})",
     re.I,
 )
 EXPLICIT_DATE_RE = re.compile(
-    r"(?:date|日期|交易日)\s*[:：=]?\s*(\d{4})-(\d{1,2})-(\d{1,2})", re.I
+    r"(?:date)\s*[:=]?\s*(\d{4})-(\d{1,2})-(\d{1,2})", re.I
 )
 BARE_DATE_RE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
 # Exchange-suffixed tickers are unambiguous, so the base may be long
@@ -177,7 +177,7 @@ def parse_request(text: str) -> dict | None:
 
 # "re-run it" style intent — overrides the cached-result shortcut below.
 REANALYZE_RE = re.compile(
-    r"\b(re-?run|re-?analyze|reanalysis|refresh|again)\b|重新|再来|再(跑|分析|来)", re.I
+    r"\b(re-?run|re-?analyze|reanalysis|refresh|again)\b", re.I
 )
 
 

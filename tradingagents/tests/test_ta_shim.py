@@ -225,7 +225,7 @@ class TestResolveTurn(ShimTestCase):
         self.assertEqual(m.resolve_turn("show the report for NVDA",
                                         P("show the report for NVDA"), done), "result")
         self.assertEqual(m.resolve_turn("NVDA?", P("NVDA?"), done), "result")
-        self.assertEqual(m.resolve_turn("结果", P("结果"), done), "result")
+        self.assertEqual(m.resolve_turn("what was the verdict?", P("what was the verdict?"), done), "result")
 
         # same ticker + same explicit date -> result
         self.assertEqual(m.resolve_turn("NVDA 2026-11-19 report",
@@ -237,7 +237,7 @@ class TestResolveTurn(ShimTestCase):
 
         # re-run keywords -> fresh run
         self.assertEqual(m.resolve_turn("re-run NVDA", P("re-run NVDA"), done), "start")
-        self.assertEqual(m.resolve_turn("重新分析 NVDA", P("重新分析 NVDA"), done), "start")
+        self.assertEqual(m.resolve_turn("re-analyze NVDA", P("re-analyze NVDA"), done), "start")
 
         # different ticker -> fresh run
         self.assertEqual(m.resolve_turn("analyze TSLA", P("analyze TSLA"), done), "start")
