@@ -126,9 +126,33 @@ class TestReportSelection(ShimTestCase):
         run = self._run("AAPL", "2026-11-19")
         m._collect_report(run)
         # The NVDA report must be ignored; the run's own per-role report may
-        # be used (it names the ticker and sits under the run's date dir).
+        # be used (exact ticker + date components).
         if run.report_path is not None:
             self.assertIn("AAPL", run.report_path)
+
+    def test_same_date_other_ticker_is_rejected(self):
+        """Reviewer repro: AAPL run on 2026-11-19 must not adopt NVDA's
+        per-role tree written for the SAME date."""
+        self._touch("logs/NVDA/2026-11-19/reports/final_trade_decision.md", "NVDA decision")
+        run = self._run("AAPL", "2026-11-19")
+        m._collect_report(run)
+        self.assertIsNone(run.report_path)
+
+    def test_one_letter_ticker_does_not_match_substrings(self):
+        """Reviewer repro: ticker 'V' must not match paths merely containing
+        the letter v (nvda_...)."""
+        self._touch("logs/reports/NVDA_20261119_000000/complete_report.md", "- Rating: Buy\n")
+        self._touch("logs/V/2026-11-19/reports/market_report.md", "V market notes")
+        run = self._run("V", "2026-11-19")
+        m._collect_report(run)
+        self.assertIsNotNone(run.report_path)
+        self.assertIn("/V/", run.report_path)
+
+    def test_same_ticker_other_date_is_rejected(self):
+        self._touch("logs/NVDA/2026-11-18/reports/market_report.md", "old date notes")
+        run = self._run("NVDA", "2026-11-19")
+        m._collect_report(run)
+        self.assertIsNone(run.report_path)
 
     def test_only_foreign_reports_means_no_report(self):
         self._touch("logs/reports/NVDA_1/complete_report.md", "- Rating: Buy\n")
@@ -209,38 +233,52 @@ class TestResolveTurn(ShimTestCase):
         P = m.parse_request
 
         # no current run
-        self.assertEqual(m.resolve_turn("hello", P("hello"), None), "help")
-        self.assertEqual(m.resolve_turn("analyze NVDA", P("analyze NVDA"), None), "start")
+        self.assertEqual(m.resolve_turn("hello", P("hello"), None), ("help", None))
+        self.assertEqual(m.resolve_turn("analyze NVDA", P("analyze NVDA"), None),
+                         ("start", P("analyze NVDA")))
 
         # running run: always status, no second run
         running = self._run()
         running.status = "running"
-        self.assertEqual(m.resolve_turn("progress", P("progress"), running), "status")
-        self.assertEqual(m.resolve_turn("analyze TSLA", P("analyze TSLA"), running), "status")
+        self.assertEqual(m.resolve_turn("progress", P("progress"), running), ("status", None))
+        self.assertEqual(m.resolve_turn("analyze TSLA", P("analyze TSLA"), running), ("status", None))
 
         # finished run: the reviewer's scenario — same ticker, no date,
         # must NOT start another analysis
         done = self._run("NVDA", "2026-11-19")
         done.status = "done"
         self.assertEqual(m.resolve_turn("show the report for NVDA",
-                                        P("show the report for NVDA"), done), "result")
-        self.assertEqual(m.resolve_turn("NVDA?", P("NVDA?"), done), "result")
-        self.assertEqual(m.resolve_turn("结果", P("结果"), done), "result")
+                                        P("show the report for NVDA"), done), ("result", None))
+        self.assertEqual(m.resolve_turn("NVDA?", P("NVDA?"), done), ("result", None))
+        self.assertEqual(m.resolve_turn("结果", P("结果"), done), ("result", None))
 
         # same ticker + same explicit date -> result
         self.assertEqual(m.resolve_turn("NVDA 2026-11-19 report",
-                                        P("NVDA 2026-11-19 report"), done), "result")
+                                        P("NVDA 2026-11-19 report"), done), ("result", None))
 
         # same ticker + different explicit date -> fresh run
         self.assertEqual(m.resolve_turn("analyze NVDA on 2026-11-18",
-                                        P("analyze NVDA on 2026-11-18"), done), "start")
+                                        P("analyze NVDA on 2026-11-18"), done),
+                         ("start", P("analyze NVDA on 2026-11-18")))
 
-        # re-run keywords -> fresh run
-        self.assertEqual(m.resolve_turn("re-run NVDA", P("re-run NVDA"), done), "start")
-        self.assertEqual(m.resolve_turn("重新分析 NVDA", P("重新分析 NVDA"), done), "start")
+        # re-run keywords with a ticker -> fresh run
+        self.assertEqual(m.resolve_turn("re-run NVDA", P("re-run NVDA"), done),
+                         ("start", P("re-run NVDA")))
+        self.assertEqual(m.resolve_turn("重新分析 NVDA", P("重新分析 NVDA"), done),
+                         ("start", P("重新分析 NVDA")))
+
+        # reviewer repro: bare re-run commands (no ticker) must re-run the
+        # LAST ticker/date, not replay the stale result
+        self.assertEqual(m.resolve_turn("re-run", P("re-run"), done),
+                         ("start", {"ticker": "NVDA", "date": "2026-11-19"}))
+        self.assertEqual(m.resolve_turn("again", P("again"), done),
+                         ("start", {"ticker": "NVDA", "date": "2026-11-19"}))
+        self.assertEqual(m.resolve_turn("重新分析", P("重新分析"), done),
+                         ("start", {"ticker": "NVDA", "date": "2026-11-19"}))
 
         # different ticker -> fresh run
-        self.assertEqual(m.resolve_turn("analyze TSLA", P("analyze TSLA"), done), "start")
+        self.assertEqual(m.resolve_turn("analyze TSLA", P("analyze TSLA"), done),
+                         ("start", P("analyze TSLA")))
 
 
 if __name__ == "__main__":

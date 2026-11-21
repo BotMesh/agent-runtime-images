@@ -188,34 +188,42 @@ def _explicit_date_in(text: str) -> str | None:
     return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
 
 
-def resolve_turn(text: str, parsed: dict | None, current: "Run | None") -> str:
+def resolve_turn(text: str, parsed: dict | None, current: "Run | None") -> tuple:
     """Decide what a chat turn does (pure function; testable without HTTP).
 
-    Returns:
-      "help"   — nothing to do: no ticker parsed and no run to report on
+    Returns (action, target).  action is one of:
+      "help"   — nothing to do: no ticker and no run to report on
       "status" — a run is in flight; report its progress
       "result" — show the finished run's result (or its error)
-      "start"  — start a new run (parsed carries ticker/date)
+      "start"  — start a new run
+    target is the {ticker, date} to start (only for "start"): the parsed one,
+    or the previous run's when a bare re-run command ("re-run", "again",
+    "重新分析") names no ticker.  None otherwise.
 
     Follow-up policy (review finding: "show the report for NVDA" must NOT
     burn another run): after a finished run, a message naming the same
     ticker without an explicit *different* date returns the cached result;
-    an explicit different date or a re-run keyword starts a fresh analysis.
+    an explicit different date or a re-run intent starts a fresh analysis.
     """
     if current is None:
-        return "help" if parsed is None else "start"
+        return ("help", None) if parsed is None else ("start", parsed)
     if current.status == "running":
-        return "status"
+        return "status", None
+    reanalyze = bool(REANALYZE_RE.search(text))
     if parsed is None:
-        return "result"
+        if reanalyze:
+            # Bare "re-run" / "again" / "重新分析" — re-run the last
+            # ticker/date instead of replaying the stale result.
+            return "start", {"ticker": current.ticker, "date": current.date}
+        return "result", None
     if parsed["ticker"].lower() != current.ticker.lower():
-        return "start"
-    if REANALYZE_RE.search(text):
-        return "start"
+        return "start", parsed
+    if reanalyze:
+        return "start", parsed
     explicit = _explicit_date_in(text)
     if explicit is not None and explicit != current.date:
-        return "start"
-    return "result"
+        return "start", parsed
+    return "result", None
 
 
 def last_user_text(messages) -> str:
@@ -452,25 +460,31 @@ def _collect_report(run: Run) -> None:
                 candidates.append((mtime, path))
     if not candidates:
         return
-    # Scope candidates to THIS run.  Report dirs are named <TICKER>_<ts>
-    # (consolidated) and <TICKER>/<date> (per-role); a file that names
-    # another ticker belongs to an earlier run — adopting it is how an
-    # AAPL analysis once returned a stale NVDA report after its own
-    # consolidated report failed to save.  Files naming neither (e.g. the
-    # cross-ticker memory log) are never "the report".
+    # Scope candidates to THIS run with EXACT path-component matches.
+    # Substring checks are unsound: a one-letter ticker matches inside any
+    # path containing that letter ("v" in "nvda_..."), and a shared date
+    # matches another ticker's per-role tree (logs/NVDA/<same date>/).
+    # Accepted shapes:
+    #   logs/<TICKER>/<DATE>/...                (per-role; ticker AND date exact)
+    #   logs/reports/<TICKER>_<YYYYMMDD_HHMMSS>/...  (consolidated; the ts is
+    #   run-start time, so same-ticker runs are separated by the mtime window)
     ticker_lc = run.ticker.lower()
+    date_lc = run.date.lower()
 
     def scope(path: str) -> int:
-        p = path.lower()
-        if ticker_lc in p:
-            return 0
-        if run.date in p:
-            return 1
-        return 2
+        parts = [p.lower() for p in os.path.relpath(path, DATA_ROOT).split(os.sep)]
+        for i, part in enumerate(parts[:-1]):  # directories only
+            if part == ticker_lc:
+                if date_lc in parts[i + 1:]:
+                    return 0
+                return 3  # same ticker, different date -> earlier run
+            if part.startswith(ticker_lc + "_"):
+                return 0
+        return 3
 
-    scoped = [c for c in candidates if scope(c[1]) <= 1]
+    scoped = [c for c in candidates if scope(c[1]) == 0]
     if not scoped:
-        _log(f"no report file names run {run.ticker} {run.date}; not adopting a foreign report")
+        _log(f"no report file belongs to run {run.ticker} {run.date}; not adopting a foreign report")
         return
     scoped.sort()
 
@@ -683,7 +697,7 @@ def _handle_chat(handler: BaseHTTPRequestHandler, body: bytes) -> None:
 
     parsed = parse_request(text)
     current = SLOT.get()
-    action = resolve_turn(text, parsed, current)
+    action, target = resolve_turn(text, parsed, current)
 
     if action == "help":
         content = "I couldn't tell which ticker to analyze.\n" + HELP_TEXT
@@ -699,7 +713,7 @@ def _handle_chat(handler: BaseHTTPRequestHandler, body: bytes) -> None:
     if action in ("status", "result"):
         run, started_now = current, False
     else:  # start
-        run, started_now = SLOT.claim(parsed["ticker"], parsed["date"])
+        run, started_now = SLOT.claim(target["ticker"], target["date"])
         if started_now:
             _start_proc(run)
 
